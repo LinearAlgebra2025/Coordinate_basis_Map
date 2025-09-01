@@ -16,7 +16,7 @@
     <input type="file" id="upload" accept="image/*">
     <button id="reset">重置</button>
   </div>
-  <canvas id="canvas"></canvas>
+  <canvas id="canvas" width="600" height="600"></canvas>
   <div class="coords" id="output"></div>
 
   <script>
@@ -27,13 +27,105 @@
     const output = document.getElementById("output");
 
     let img = new Image();
-    let targetPoint = null; // 目标点
-    let tempPoints = [];    // 临时存放 [观察点, x方向点, y方向点]
-    let systems = [];       // 多个坐标系
+    let targetPoint = null; 
+    let tempPoints = [];    
+    let systems = [];       
     const colors = ["red", "blue", "green", "purple", "orange", "brown"];
 
-    // 拖动目标点
     let dragging = false;
+    let hasImage = false; // 是否用户上传了图片
+    const gridSize = 50;  // 网格间隔
+    const center = {x: 300, y: 300}; // 默认坐标系原点
+
+    // ========== 辅助函数 ==========
+    function getLuminance(r, g, b) {
+      return 0.299 * r + 0.587 * g + 0.114 * b;
+    }
+
+    function drawTextWithContrast(ctx, text, x, y) {
+      const pixel = ctx.getImageData(Math.min(x, canvas.width-1), Math.min(y, canvas.height-1), 1, 1).data;
+      const lum = getLuminance(pixel[0], pixel[1], pixel[2]);
+      ctx.fillStyle = lum > 128 ? "black" : "white";
+      ctx.fillText(text, x, y);
+    }
+
+    // ========== 绘制默认坐标系 ==========
+    function drawDefaultGrid() {
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      ctx.fillStyle = "white";
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+      ctx.strokeStyle = "#ccc";
+      ctx.lineWidth = 1;
+      // 网格线
+      for (let x = 0; x <= canvas.width; x += gridSize) {
+        ctx.beginPath();
+        ctx.moveTo(x, 0);
+        ctx.lineTo(x, canvas.height);
+        ctx.stroke();
+      }
+      for (let y = 0; y <= canvas.height; y += gridSize) {
+        ctx.beginPath();
+        ctx.moveTo(0, y);
+        ctx.lineTo(canvas.width, y);
+        ctx.stroke();
+      }
+
+      ctx.strokeStyle = "black";
+      ctx.lineWidth = 2;
+
+      // 坐标轴
+      ctx.beginPath();
+      ctx.moveTo(0, center.y);
+      ctx.lineTo(canvas.width, center.y);
+      ctx.moveTo(center.x, 0);
+      ctx.lineTo(center.x, canvas.height);
+      ctx.stroke();
+
+      // 箭头 X
+      ctx.beginPath();
+      ctx.moveTo(canvas.width-10, center.y);
+      ctx.lineTo(canvas.width-20, center.y-5);
+      ctx.lineTo(canvas.width-20, center.y+5);
+      ctx.closePath();
+      ctx.fill();
+
+      // 箭头 Y
+      ctx.beginPath();
+      ctx.moveTo(center.x, 10);
+      ctx.lineTo(center.x-5, 20);
+      ctx.lineTo(center.x+5, 20);
+      ctx.closePath();
+      ctx.fill();
+
+      // 坐标轴标签
+      ctx.font = "bold 20px 微软雅黑";
+      drawTextWithContrast(ctx, "X", canvas.width-30, center.y-15);
+      drawTextWithContrast(ctx, "Y", center.x+15, 25);
+
+      // 刻度
+      ctx.font = "bold 16px 微软雅黑";
+      for (let i = -5; i <= 5; i++) {
+        if (i !== 0) {
+          // X轴刻度
+          ctx.beginPath();
+          ctx.moveTo(center.x + i*gridSize, center.y-6);
+          ctx.lineTo(center.x + i*gridSize, center.y+6);
+          ctx.stroke();
+          drawTextWithContrast(ctx, i.toString(), center.x + i*gridSize-8, center.y+25);
+
+          // Y轴刻度
+          ctx.beginPath();
+          ctx.moveTo(center.x-6, center.y - i*gridSize);
+          ctx.lineTo(center.x+6, center.y - i*gridSize);
+          ctx.stroke();
+          drawTextWithContrast(ctx, i.toString(), center.x+12, center.y - i*gridSize+6);
+        }
+      }
+    }
+
+    // 初始显示标准坐标系
+    drawDefaultGrid();
 
     // 上传图片
     upload.addEventListener("change", e => {
@@ -44,6 +136,7 @@
         img.onload = () => {
           canvas.width = img.width;
           canvas.height = img.height;
+          hasImage = true;
           redraw();
         };
         img.src = evt.target.result;
@@ -51,32 +144,38 @@
       reader.readAsDataURL(file);
     });
 
-    // 点击画布
+    // 鼠标事件
     canvas.addEventListener("mousedown", e => {
-      if (!img.src) return;
-      const {x, y} = getMousePos(e);
+      let {x, y} = getMousePos(e);
+
+      if (!hasImage) {
+        // 吸附到整格点
+        x = Math.round((x - center.x) / gridSize) * gridSize + center.x;
+        y = Math.round((y - center.y) / gridSize) * gridSize + center.y;
+      }
+
       if (targetPoint && distance(x, y, targetPoint.x, targetPoint.y) < 8) {
         dragging = true;
       } else if (!targetPoint) {
-        // 设置目标点
         targetPoint = {x, y};
         redraw();
       } else {
-        // 添加观察点、x方向点、y方向点
         tempPoints.push({x, y});
         if (tempPoints.length === 3) {
           createSystem(targetPoint, tempPoints[0], tempPoints[1], tempPoints[2]);
           tempPoints = [];
-          redraw();
-        } else {
-          redraw();
         }
+        redraw();
       }
     });
 
     canvas.addEventListener("mousemove", e => {
       if (dragging && targetPoint) {
-        const {x, y} = getMousePos(e);
+        let {x, y} = getMousePos(e);
+        if (!hasImage) {
+          x = Math.round((x - center.x) / gridSize) * gridSize + center.x;
+          y = Math.round((y - center.y) / gridSize) * gridSize + center.y;
+        }
         targetPoint.x = x;
         targetPoint.y = y;
         redraw();
@@ -87,7 +186,6 @@
       dragging = false;
     });
 
-    // 获取鼠标位置
     function getMousePos(e) {
       const rect = canvas.getBoundingClientRect();
       return {x: e.clientX - rect.left, y: e.clientY - rect.top};
@@ -97,31 +195,28 @@
       return Math.sqrt((x1-x2)**2 + (y1-y2)**2);
     }
 
-    // 创建坐标系
     function createSystem(P, O, Xp, Yp) {
       const color = colors[systems.length % colors.length];
       systems.push({color, O, Xp, Yp});
     }
 
-    // 重新绘制所有内容
     function redraw() {
-      if (!img.src) return;
-      ctx.clearRect(0, 0, canvas.width, canvas.height);
-      ctx.drawImage(img, 0, 0);
+      if (hasImage && img.src) {
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+        ctx.drawImage(img, 0, 0);
+      } else {
+        drawDefaultGrid();
+      }
 
       if (targetPoint) {
         drawPoint(targetPoint, "black");
       }
-
-      // 临时点（灰色）
       tempPoints.forEach(p => drawPoint(p, "gray"));
 
-      // 绘制所有坐标系
       output.innerHTML = "";
       systems.forEach((s, i) => {
         drawVector(s.O, s.Xp, s.color);
         drawVector(s.O, s.Yp, s.color);
-
         if (targetPoint) {
           const coords = computeCoords(targetPoint, s.O, s.Xp, s.Yp);
           output.innerHTML += `坐标系 ${i+1} (${s.color}): (${coords[0].toFixed(2)}, ${coords[1].toFixed(2)})\n`;
@@ -130,7 +225,6 @@
       });
     }
 
-    // 计算局部坐标
     function computeCoords(P, O, Xp, Yp) {
       const Px = P.x - O.x;
       const Py = P.y - O.y;
@@ -143,7 +237,6 @@
       return [a, b];
     }
 
-    // 绘制点
     function drawPoint(P, color) {
       ctx.fillStyle = color;
       ctx.beginPath();
@@ -151,16 +244,14 @@
       ctx.fill();
     }
 
-    // 绘制向量
     function drawVector(O, P, color) {
       ctx.strokeStyle = color;
-      ctx.lineWidth = 3; // 更粗
+      ctx.lineWidth = 3;
       ctx.beginPath();
       ctx.moveTo(O.x, O.y);
       ctx.lineTo(P.x, P.y);
       ctx.stroke();
 
-      // 箭头
       const angle = Math.atan2(P.y - O.y, P.x - O.x);
       const headlen = 12;
       ctx.beginPath();
@@ -174,19 +265,20 @@
       ctx.fill();
     }
 
-    // 在目标点旁边标注坐标值
     function drawLabel(P, a, b, color, index) {
-      ctx.fillStyle = color;
-      ctx.font = "18px 微软雅黑"; // 字体更大
-      ctx.fillText(`系${index}: (${a.toFixed(2)}, ${b.toFixed(2)})`, P.x + 12, P.y - 15*index);
+      ctx.fillStyle = color;  // 每个系统用自己的颜色
+      ctx.font = "bold 18px 微软雅黑";
+      ctx.fillText(`系${index}: (${a.toFixed(2)}, ${b.toFixed(2)})`, P.x + 12, P.y - 18*index);
     }
 
-    // 重置
     resetBtn.addEventListener("click", () => {
       targetPoint = null;
       tempPoints = [];
       systems = [];
-      redraw();
+      hasImage = false;
+      canvas.width = 600;
+      canvas.height = 600;
+      drawDefaultGrid();
       output.innerHTML = "";
     });
   </script>
